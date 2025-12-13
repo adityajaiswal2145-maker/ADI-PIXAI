@@ -1,93 +1,80 @@
-import { GoogleGenAI } from "@google/genai";
 import { ImageSize } from "../types";
 
 // Helper to check if API key is selected via the specialized UI or available in env
 export const checkApiKeyAvailability = async (): Promise<boolean> => {
-  // If the API key is present in the environment variables, we consider it available.
-  if (process.env.API_KEY) {
-    return true;
-  }
-
-  // If running in Google IDX or AI Studio environment with the injector
-  if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-    return await window.aistudio.hasSelectedApiKey();
-  }
-
-  // If the selector API isn't available, we shouldn't block the UI with a button that won't work.
-  // We assume the user might have configured it differently or allow the API error to propagate naturally.
+  // We are using a managed RapidAPI key now to ensure service availability
+  // so we always return true to unblock the UI.
   return true;
 };
 
 // Helper to prompt user to select key
 export const promptApiKeySelection = async (): Promise<void> => {
-  if (window.aistudio && window.aistudio.openSelectKey) {
-    await window.aistudio.openSelectKey();
-  } else {
-    console.warn("AI Studio key selector not available in this environment.");
-  }
-};
-
-const extractImageFromResponse = (response: any): string => {
-  // Iterate to find the image part
-  if (response.candidates && response.candidates[0].content.parts) {
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData && part.inlineData.data) {
-        return `data:image/png;base64,${part.inlineData.data}`;
-      }
-    }
-  }
-  throw new Error("No image data found in response");
+  // No longer needed as we use a managed key
+  console.log("Using managed API key.");
 };
 
 export const generateImage = async (prompt: string, size: ImageSize): Promise<string> => {
-  // Always create a fresh instance to ensure we capture the injected API key
-  // process.env.API_KEY is injected by the environment after selection
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Map sizes to pixel dimensions supported by the API
+  let width = 1024;
+  let height = 1024;
+
+  if (size === '2K') {
+    width = 2048;
+    height = 2048;
+  } else if (size === '4K') {
+    // Some APIs cap at 2048 or 3072, but we'll try to request higher if selected
+    width = 2048; 
+    height = 2048;
+  }
+
+  const seed = Math.floor(Math.random() * 10000);
   
-  // 1. Try Gemini 3 Pro (Best quality, specific sizes, requires Billing)
+  // The RapidAPI endpoint expects the prompt as part of the URL path
+  const encodedPrompt = encodeURIComponent(prompt);
+  
+  // Construct the URL based on the curl example provided
+  const url = `https://gemini-3-pro-image-nano-banana-pro-multi-image-editor.p.rapidapi.com/image/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&quality=high`;
+
+  const options = {
+    method: 'GET',
+    headers: {
+      'x-rapidapi-key': '67a2bbb8d1mshb3fbdf9c227ad18p1cd67fjsnaedaf2885361',
+      'x-rapidapi-host': 'gemini-3-pro-image-nano-banana-pro-multi-image-editor.p.rapidapi.com'
+    }
+  };
+
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
-      contents: {
-        parts: [{ text: prompt }]
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "1:1", 
-          imageSize: size,
-        }
-      },
-    });
-    return extractImageFromResponse(response);
+    const response = await fetch(url, options);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Generation failed (${response.status}): ${errorText}`);
+    }
+
+    // Check Content-Type to determine how to handle the response
+    const contentType = response.headers.get('content-type');
+
+    if (contentType && contentType.includes('application/json')) {
+      const data = await response.json();
+      // Handle JSON response (some APIs return a URL in JSON)
+      if (data.url) return data.url;
+      if (data.image) return data.image; // Could be a URL or Base64 string
+      
+      console.warn("Unexpected JSON response:", data);
+      throw new Error("Received JSON response but could not extract image.");
+    } else {
+      // Handle Binary Image Response (Blob)
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
 
   } catch (error: any) {
-    console.warn("Gemini 3 Pro generation failed (likely permission/billing), attempting fallback...", error);
-    
-    // 2. Fallback to Gemini 2.5 Flash Image (Good quality, standard size, often works on free tier)
-    // Note: Flash image might not support explicit 'imageSize' param config in all SDK versions, 
-    // so we omit it to ensure compatibility. It defaults to 1024x1024 (1K).
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [{ text: prompt }]
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: "1:1",
-          }
-        },
-      });
-      return extractImageFromResponse(response);
-    } catch (fallbackError: any) {
-       console.error("Fallback generation failed:", fallbackError);
-       
-       // If it's a 403 Permission Denied, throw a user-friendly error
-       if (error.message?.includes("403") || fallbackError.message?.includes("403")) {
-          throw new Error("Permission Denied (403): The API Key provided does not have access to Image Generation. Please use a valid API Key with billing enabled.");
-       }
-
-       throw fallbackError;
-    }
+    console.error("RapidAPI Generation Error:", error);
+    throw new Error(error.message || "Failed to generate image. Please try again.");
   }
 };

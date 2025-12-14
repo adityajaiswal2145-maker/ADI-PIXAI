@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { generateImage, checkApiKeyAvailability, promptApiKeySelection } from '../services/geminiService';
-import { ImageSize } from '../types';
-import { Download, Loader2, Sparkles, KeyRound, ExternalLink } from 'lucide-react';
+import { ImageSize, AIModel } from '../types';
+import { Download, Loader2, Sparkles, KeyRound, ExternalLink, Cpu, Layers } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const Generator: React.FC = () => {
   const { user, isAuthenticated, deductCredits } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [size, setSize] = useState<ImageSize>('1K');
+  const [selectedModel, setSelectedModel] = useState<AIModel>('gemini-3-pro');
   const [loading, setLoading] = useState(false);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,15 +27,12 @@ const Generator: React.FC = () => {
     };
     
     checkKey();
-    
-    // Poll briefly to catch update if user just selected it
     const interval = setInterval(checkKey, 2000);
     return () => clearInterval(interval);
   }, []);
 
   const handleSelectKey = async () => {
     await promptApiKeySelection();
-    // After returning from selection dialog, force a check
     const isSet = await checkApiKeyAvailability();
     setApiKeySet(isSet);
   };
@@ -46,13 +44,15 @@ const Generator: React.FC = () => {
     }
 
     if (!apiKeySet) {
-      // Even though we show a blocker, double check here
-      setError("Please select a paid API key to use the Pro model.");
+      setError("Please configuration is required.");
       return;
     }
 
-    if (user.credits < 2) {
-      setError("Insufficient credits. Please purchase more.");
+    // Determine credit cost based on model
+    const cost = selectedModel === 'gemini-3-pro' || selectedModel === 'dalle-3' ? 2 : 1;
+
+    if (user.credits < cost) {
+      setError(`Insufficient credits. This model requires ${cost} credits.`);
       return;
     }
 
@@ -66,13 +66,12 @@ const Generator: React.FC = () => {
     setGeneratedImage(null);
 
     try {
-      // Deduct credits before generation (or after, depending on preference. PRD says "Auto deduction on image generation")
-      const deductionSuccess = deductCredits(2);
+      const deductionSuccess = deductCredits(cost);
       if (!deductionSuccess) {
         throw new Error("Credit deduction failed.");
       }
 
-      const imageUrl = await generateImage(prompt, size);
+      const imageUrl = await generateImage(prompt, size, selectedModel);
       setGeneratedImage(imageUrl);
     } catch (err: any) {
       console.error(err);
@@ -86,12 +85,19 @@ const Generator: React.FC = () => {
     if (generatedImage) {
       const link = document.createElement('a');
       link.href = generatedImage;
-      link.download = `adi-pixai-${Date.now()}.png`;
+      link.download = `adi-pixai-${selectedModel}-${Date.now()}.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     }
   };
+
+  const models: {id: AIModel, name: string, description: string, cost: number}[] = [
+    { id: 'gemini-3-pro', name: 'Gemini 3.0 Pro', description: 'Highest quality, best for complex prompts', cost: 2 },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Fast generation, good for concepts', cost: 1 },
+    { id: 'dalle-3', name: 'Chat GPT (DALL-E 3)', description: 'Creative and artistic interpretations', cost: 2 },
+    { id: 'stable-diffusion', name: 'Stable Diffusion', description: 'Balanced realism and art', cost: 1 },
+  ];
 
   if (!isAuthenticated) {
     return (
@@ -113,34 +119,18 @@ const Generator: React.FC = () => {
         
         {/* Header */}
         <div className="mb-10 text-center">
-          <h1 className="text-3xl md:text-4xl font-bold mb-3">AI Image Generator</h1>
-          <p className="text-zinc-400">Powered by Gemini 3 Pro Image Preview</p>
+          <h1 className="text-3xl md:text-4xl font-bold mb-3">AI Image Studio</h1>
+          <p className="text-zinc-400">Create with Gemini 3.0, DALL-E 3, and more.</p>
         </div>
 
         {/* API Key Blocker / Selector */}
         {!apiKeySet && (
           <div className="mb-8 p-6 rounded-xl border border-amber-500/20 bg-amber-500/10 flex flex-col items-center text-center">
             <KeyRound className="w-10 h-10 text-amber-500 mb-3" />
-            <h3 className="text-lg font-semibold text-amber-200 mb-2">API Key Selection Required</h3>
+            <h3 className="text-lg font-semibold text-amber-200 mb-2">Configuration Required</h3>
             <p className="text-zinc-300 mb-4 max-w-lg">
-              To use the high-quality <b>Gemini 3 Pro</b> model (supporting 2K/4K), you must select a paid API key associated with a Google Cloud Project.
+              System configuration check failed. Please ensure API keys are configured.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 items-center">
-               <button 
-                onClick={handleSelectKey}
-                className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-lg transition-colors"
-              >
-                Select API Key
-              </button>
-              <a 
-                href="https://ai.google.dev/gemini-api/docs/billing" 
-                target="_blank" 
-                rel="noreferrer"
-                className="text-sm text-amber-400 hover:text-amber-300 underline flex items-center gap-1"
-              >
-                Read Billing Docs <ExternalLink size={12}/>
-              </a>
-            </div>
           </div>
         )}
 
@@ -149,11 +139,32 @@ const Generator: React.FC = () => {
           <div className="bg-zinc-900 rounded-xl p-6 md:p-8">
             <div className="flex flex-col gap-6">
               
+              {/* Model Selection */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+                 {models.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => setSelectedModel(m.id)}
+                      className={`flex flex-col text-left p-4 rounded-xl border transition-all ${
+                        selectedModel === m.id 
+                          ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_15px_rgba(99,102,241,0.2)]' 
+                          : 'border-white/5 bg-zinc-950/50 hover:bg-zinc-800 hover:border-white/10'
+                      }`}
+                    >
+                       <div className="flex justify-between items-center w-full mb-1">
+                          <span className={`font-semibold ${selectedModel === m.id ? 'text-white' : 'text-zinc-300'}`}>{m.name}</span>
+                          <span className="text-xs font-mono px-2 py-0.5 rounded bg-white/5 text-zinc-400">{m.cost} Credits</span>
+                       </div>
+                       <span className="text-xs text-zinc-500">{m.description}</span>
+                    </button>
+                 ))}
+              </div>
+
               <div className="relative">
                 <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Enter your imagination... (e.g., a futuristic cyberpunk city in rain, neon lights, 8k resolution)"
+                  placeholder={`Describe what you want to see with ${models.find(m => m.id === selectedModel)?.name}...`}
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-lg text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none h-32"
                 />
               </div>
@@ -166,11 +177,12 @@ const Generator: React.FC = () => {
                       <button
                         key={s}
                         onClick={() => setSize(s)}
+                        disabled={selectedModel === 'gemini-2.5-flash'} // Flash is fixed size usually
                         className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
                           size === s 
                             ? 'bg-zinc-800 text-white shadow-sm' 
                             : 'text-zinc-500 hover:text-zinc-300'
-                        }`}
+                        } ${selectedModel === 'gemini-2.5-flash' ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
                         {s}
                       </button>
@@ -181,11 +193,11 @@ const Generator: React.FC = () => {
                 <div className="flex items-center gap-4 w-full md:w-auto">
                    <div className="text-right hidden md:block">
                      <div className="text-xs text-zinc-500">Cost</div>
-                     <div className="text-sm font-bold text-indigo-400">2 Credits</div>
+                     <div className="text-sm font-bold text-indigo-400">{models.find(m => m.id === selectedModel)?.cost} Credits</div>
                    </div>
                    <button
                     onClick={handleGenerate}
-                    disabled={loading || !prompt.trim() || user.credits < 2}
+                    disabled={loading || !prompt.trim() || user.credits < (models.find(m => m.id === selectedModel)?.cost || 1)}
                     className="w-full md:w-auto flex items-center justify-center gap-2 px-8 py-3 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
                   >
                     {loading ? (
@@ -194,7 +206,7 @@ const Generator: React.FC = () => {
                       </>
                     ) : (
                       <>
-                        <Sparkles size={18} /> Generate Image
+                        <Sparkles size={18} /> Generate
                       </>
                     )}
                   </button>
@@ -206,8 +218,8 @@ const Generator: React.FC = () => {
 
         {/* Error Message */}
         {error && (
-          <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-center">
-            {error}
+          <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-center flex items-center justify-center gap-2">
+            <Layers size={16} /> {error}
           </div>
         )}
 
@@ -232,7 +244,9 @@ const Generator: React.FC = () => {
               </div>
             </div>
             <div className="mt-4 text-center">
-               <p className="text-zinc-500 text-sm">Generated with Gemini 3 Pro ({size})</p>
+               <p className="text-zinc-500 text-sm flex items-center justify-center gap-2">
+                 <Cpu size={14}/> Generated with {models.find(m => m.id === selectedModel)?.name}
+               </p>
             </div>
           </div>
         )}

@@ -30,9 +30,12 @@ export interface GeneratedImage {
   prompt: string;
   createdAt: Date;
   size: '1K' | '2K' | '4K';
+  model: AIModel;
 }
 
 export type ImageSize = '1K' | '2K' | '4K';
+
+export type AIModel = 'gemini-3-pro' | 'gemini-2.5-flash' | 'dalle-3' | 'stable-diffusion';
 
 export interface AuthState {
   user: User | null;

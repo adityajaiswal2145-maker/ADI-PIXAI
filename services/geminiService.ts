@@ -1,80 +1,154 @@
-import { ImageSize } from "../types";
+import { GoogleGenAI } from "@google/genai";
+import { ImageSize, AIModel } from "../types";
 
-// Helper to check if API key is selected via the specialized UI or available in env
+// --- API KEYS CONFIGURATION ---
+const GEMINI_API_KEY = "AIzaSyAcehEg5TyouTqtoP7zL1PVLD4dtp7EOQ4"; 
+// Note: For DALL-E and Stable Diffusion, in a real production app these should be 
+// environment variables or user-provided. 
+const OPENAI_API_KEY = ""; // Add your OpenAI Key here if desired
+const STABILITY_API_KEY = ""; // Add your Stability AI Key here if desired
+
+// Helper to check if API key is available (Legacy support for UI)
 export const checkApiKeyAvailability = async (): Promise<boolean> => {
-  // We are using a managed RapidAPI key now to ensure service availability
-  // so we always return true to unblock the UI.
   return true;
 };
 
-// Helper to prompt user to select key
 export const promptApiKeySelection = async (): Promise<void> => {
-  // No longer needed as we use a managed key
-  console.log("Using managed API key.");
+  console.log("Using configured API keys.");
 };
 
-export const generateImage = async (prompt: string, size: ImageSize): Promise<string> => {
-  // Map sizes to pixel dimensions supported by the API
-  let width = 1024;
-  let height = 1024;
+const extractImageFromGeminiResponse = (response: any): string => {
+  if (response.candidates && response.candidates[0].content.parts) {
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData && part.inlineData.data) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
+  }
+  throw new Error("No image data found in Gemini response");
+};
 
-  if (size === '2K') {
-    width = 2048;
-    height = 2048;
-  } else if (size === '4K') {
-    // Some APIs cap at 2048 or 3072, but we'll try to request higher if selected
-    width = 2048; 
-    height = 2048;
+// --- MODEL SPECIFIC GENERATORS ---
+
+const generateGemini3Pro = async (prompt: string, size: ImageSize): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-pro-image-preview',
+    contents: { parts: [{ text: prompt }] },
+    config: {
+      imageConfig: {
+        aspectRatio: "1:1", 
+        imageSize: size, // Supports 1K, 2K, 4K
+      }
+    },
+  });
+  return extractImageFromGeminiResponse(response);
+};
+
+const generateGeminiFlash = async (prompt: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-image',
+    contents: { parts: [{ text: prompt }] },
+    config: {
+      imageConfig: { aspectRatio: "1:1" }
+    },
+  });
+  return extractImageFromGeminiResponse(response);
+};
+
+const generateDallE3 = async (prompt: string, size: ImageSize): Promise<string> => {
+  if (!OPENAI_API_KEY) throw new Error("OpenAI API Key is missing in configuration.");
+  
+  // Map size to DALL-E supported sizes
+  const dalleSize = size === '1K' ? "1024x1024" : "1024x1024"; // DALL-E 3 standard
+
+  const response = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENAI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: "dall-e-3",
+      prompt: prompt,
+      n: 1,
+      size: dalleSize,
+      response_format: "b64_json"
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error?.message || "DALL-E generation failed");
   }
 
-  const seed = Math.floor(Math.random() * 10000);
-  
-  // The RapidAPI endpoint expects the prompt as part of the URL path
-  const encodedPrompt = encodeURIComponent(prompt);
-  
-  // Construct the URL based on the curl example provided
-  const url = `https://gemini-3-pro-image-nano-banana-pro-multi-image-editor.p.rapidapi.com/image/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&quality=high`;
+  const data = await response.json();
+  return `data:image/png;base64,${data.data[0].b64_json}`;
+};
 
-  const options = {
-    method: 'GET',
+const generateStableDiffusion = async (prompt: string): Promise<string> => {
+  // Using a common free/freemium endpoint or Stability AI API
+  // Using Stability AI v1 text-to-image as example
+  if (!STABILITY_API_KEY) throw new Error("Stability AI Key is missing in configuration.");
+
+  const response = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", {
+    method: "POST",
     headers: {
-      'x-rapidapi-key': '67a2bbb8d1mshb3fbdf9c227ad18p1cd67fjsnaedaf2885361',
-      'x-rapidapi-host': 'gemini-3-pro-image-nano-banana-pro-multi-image-editor.p.rapidapi.com'
-    }
-  };
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Authorization: `Bearer ${STABILITY_API_KEY}`,
+    },
+    body: JSON.stringify({
+      text_prompts: [{ text: prompt }],
+      cfg_scale: 7,
+      height: 1024,
+      width: 1024,
+      samples: 1,
+      steps: 30,
+    }),
+  });
 
+  if (!response.ok) throw new Error(`Stability AI Error: ${response.statusText}`);
+
+  const data = await response.json();
+  return `data:image/png;base64,${data.artifacts[0].base64}`;
+};
+
+// --- MAIN CONTROLLER ---
+
+export const generateImage = async (prompt: string, size: ImageSize, model: AIModel = 'gemini-3-pro'): Promise<string> => {
   try {
-    const response = await fetch(url, options);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Generation failed (${response.status}): ${errorText}`);
-    }
-
-    // Check Content-Type to determine how to handle the response
-    const contentType = response.headers.get('content-type');
-
-    if (contentType && contentType.includes('application/json')) {
-      const data = await response.json();
-      // Handle JSON response (some APIs return a URL in JSON)
-      if (data.url) return data.url;
-      if (data.image) return data.image; // Could be a URL or Base64 string
+    switch (model) {
+      case 'gemini-3-pro':
+        return await generateGemini3Pro(prompt, size);
       
-      console.warn("Unexpected JSON response:", data);
-      throw new Error("Received JSON response but could not extract image.");
-    } else {
-      // Handle Binary Image Response (Blob)
-      const blob = await response.blob();
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
+      case 'gemini-2.5-flash':
+        return await generateGeminiFlash(prompt);
+      
+      case 'dalle-3':
+        return await generateDallE3(prompt, size);
+      
+      case 'stable-diffusion':
+        return await generateStableDiffusion(prompt);
+      
+      default:
+        // Default fallback to Gemini 3 Pro
+        return await generateGemini3Pro(prompt, size);
+    }
+  } catch (error: any) {
+    console.error(`${model} Generation Error:`, error);
+    
+    // Auto-fallback logic specifically for Gemini models
+    if (model === 'gemini-3-pro') {
+      console.log("Falling back to Gemini 2.5 Flash...");
+      try {
+        return await generateGeminiFlash(prompt);
+      } catch (fbError) {
+        throw new Error("All Gemini models failed. Please try again later.");
+      }
     }
 
-  } catch (error: any) {
-    console.error("RapidAPI Generation Error:", error);
-    throw new Error(error.message || "Failed to generate image. Please try again.");
+    throw new Error(error.message || `Failed to generate image with ${model}`);
   }
 };

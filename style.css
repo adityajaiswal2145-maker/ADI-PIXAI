@@ -1,0 +1,24 @@
+/* Added better scrolling behavior for course detail pages */
+.course-content {
+  min-height: calc(100vh - 160px);
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+/* Ensure bottom navigation doesn't interfere with purchase button */
+.bottom-nav {
+  z-index: 20;
+}
+
+.sticky-purchase-btn {
+  z-index: 30;
+}
+
+/* Remove video icons from product images */
+.course-thumbnail .video-overlay {
+  display: none !important;
+}
+
+.course-image .fa-play {
+  display: none !important;
+}

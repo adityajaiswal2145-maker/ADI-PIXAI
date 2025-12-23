@@ -1,0 +1,55 @@
+/* Additional admin-specific styles */
+.admin-table {
+  min-width: 100%;
+}
+
+.admin-card {
+  transition: transform 0.2s ease-in-out;
+}
+
+.admin-card:hover {
+  transform: translateY(-2px);
+}
+
+.upload-progress {
+  transition: width 0.3s ease-in-out;
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .admin-sidebar {
+    transform: translateX(-100%);
+  }
+
+  .admin-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .admin-table {
+    font-size: 0.875rem;
+  }
+}
+
+/* Video player custom controls */
+.video-container {
+  position: relative;
+  background: #000;
+}
+
+.video-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Disable video context menu */
+video {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
